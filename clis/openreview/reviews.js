@@ -41,9 +41,9 @@ function classifyNote(note, isRoot) {
     if (tail.includes('decision')) return 'DECISION';
     if (tail.includes('withdrawal')) return 'WITHDRAWAL';
     if (tail.includes('rebuttal')) return 'REBUTTAL';
+    if (tail.includes('meta')) return 'META_REVIEW';
     if (tail.includes('review')) return 'REVIEW';
     if (tail.includes('comment')) return 'COMMENT';
-    if (tail.includes('meta')) return 'META_REVIEW';
     return tail ? tail.toUpperCase() : 'NOTE';
 }
 

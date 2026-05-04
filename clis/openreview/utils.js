@@ -80,6 +80,16 @@ export async function openreviewFetch(path, label) {
     catch (e) {
         throw new CommandExecutionError(`Malformed JSON from OpenReview for ${label}: ${e?.message ?? e}`, 'Try again or report this as an OpenReview API bug.');
     }
+    const envelopeErrors = Array.isArray(json?.errors) ? json.errors.filter(Boolean) : [];
+    const envelopeError = typeof json?.error === 'string' ? json.error.trim() : '';
+    if (envelopeErrors.length || envelopeError) {
+        const detail = envelopeError || envelopeErrors.map((entry) => {
+            if (typeof entry === 'string') return entry;
+            if (entry?.message) return String(entry.message);
+            return JSON.stringify(entry);
+        }).join('; ');
+        throw new CommandExecutionError(`OpenReview API error for ${label}: ${detail}`, 'The OpenReview API returned an application-level error.');
+    }
     return json;
 }
 

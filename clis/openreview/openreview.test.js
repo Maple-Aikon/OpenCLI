@@ -160,6 +160,17 @@ describe('openreview adapter', () => {
         });
     });
 
+    it('search wraps OpenReview in-band error envelopes as CommandExecutionError', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            errors: [{ message: 'bad term' }],
+        }), { status: 200 })));
+        const search = getRegistry().get('openreview/search');
+        await expect(search.func({ query: 'transformer', limit: 5 })).rejects.toMatchObject({
+            code: 'COMMAND_EXEC',
+            message: expect.stringContaining('bad term'),
+        });
+    });
+
     it('search returns rank-ordered rows with the expected shape', async () => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ notes: [SAMPLE_NOTE, SAMPLE_NOTE] }), { status: 200 })));
         const search = getRegistry().get('openreview/search');
@@ -249,7 +260,18 @@ describe('openreview adapter', () => {
                 decision: { value: 'Accept (poster)' },
             },
         };
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ notes: [replyReview, SAMPLE_NOTE, replyDecision] }), { status: 200 })));
+        const replyMetaReview = {
+            id: 'meta000001',
+            forum: 'abc123XYZ_',
+            replyto: 'abc123XYZ_',
+            cdate: 1727524950000,
+            invitations: ['ICLR.cc/2025/Conference/Submission1/-/Meta_Review'],
+            signatures: ['ICLR.cc/2025/Conference/Area_Chair_1'],
+            content: {
+                summary: { value: 'Meta summary' },
+            },
+        };
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ notes: [replyReview, SAMPLE_NOTE, replyDecision, replyMetaReview] }), { status: 200 })));
         const reviews = getRegistry().get('openreview/reviews');
         const rows = await reviews.func({ forum: 'abc123XYZ_', 'max-length': 4000 });
         expect(rows[0].type).toBe('PAPER');
@@ -259,9 +281,12 @@ describe('openreview adapter', () => {
         expect(rows[1].confidence).toBe('4');
         expect(rows[1].text).toContain('Summary: Short summary');
         expect(rows[1].text).toContain('Strengths: Solid baselines');
-        expect(rows[2].type).toBe('DECISION');
-        expect(rows[2].author).toBe('Program_Chairs');
-        expect(rows[2].text).toContain('Decision: Accept (poster)');
+        expect(rows[2].type).toBe('META_REVIEW');
+        expect(rows[2].author).toBe('Area_Chair_1');
+        expect(rows[2].text).toContain('Summary: Meta summary');
+        expect(rows[3].type).toBe('DECISION');
+        expect(rows[3].author).toBe('Program_Chairs');
+        expect(rows[3].text).toContain('Decision: Accept (poster)');
     });
 
     it('reviews truncates long text to max-length with ellipsis', async () => {
