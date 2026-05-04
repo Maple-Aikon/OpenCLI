@@ -53,7 +53,7 @@ cli({
         let cards;
         try {
             cards = await page.evaluate(`(async () => {
-                const hasResults = () => !!document.querySelector('.job_seen_beacon, [data-jk]');
+                const hasResults = () => !!document.querySelector('.job_seen_beacon');
                 const hasEmptyState = () => {
                     const text = document.body?.innerText || '';
                     return !!document.querySelector('[data-testid="searchCountPages"], [data-testid="searchCount"], [data-testid="noResultsMessage"], [data-testid="empty-serp-result"]')
