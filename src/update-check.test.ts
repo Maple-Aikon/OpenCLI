@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   _extractLatestExtensionVersionFromReleases as extractLatestExtensionVersionFromReleases,
   _buildUpdateNotices as buildUpdateNotices,
+  _buildNpmInstallCommand as buildNpmInstallCommand,
+  _inferOwningGlobalPrefix as inferOwningGlobalPrefix,
+  _inferDefaultPrefixFromExecPath as inferDefaultPrefixFromExecPath,
   _EXTENSION_STALE_MS as EXTENSION_STALE_MS,
 } from './update-check.js';
 
@@ -133,5 +136,112 @@ describe('buildUpdateNotices', () => {
     });
     expect(lines.cli).toContain('v1.0.0 → v1.1.0');
     expect(lines.extension).toContain('v2.0.0 → v2.1.0');
+  });
+
+  it('uses the install-command override in the CLI hint when provided', () => {
+    const lines = buildUpdateNotices({
+      cliVersion: '1.0.0',
+      cache: { lastCheck: now, latestVersion: '1.0.1' },
+      now,
+      installCommand: 'npm install -g --prefix "/custom/prefix" @jackwener/opencli',
+    });
+    expect(lines.cli).toContain('--prefix "/custom/prefix"');
+  });
+});
+
+describe('buildNpmInstallCommand', () => {
+  it('emits a bare command when prefixes match', () => {
+    expect(
+      buildNpmInstallCommand({
+        owningPrefix: '/usr/local',
+        defaultPrefix: '/usr/local',
+      }),
+    ).toBe('npm install -g @jackwener/opencli');
+  });
+
+  it('emits a bare command when owning prefix cannot be inferred (dev / source)', () => {
+    expect(
+      buildNpmInstallCommand({
+        owningPrefix: null,
+        defaultPrefix: '/usr/local',
+      }),
+    ).toBe('npm install -g @jackwener/opencli');
+  });
+
+  it('emits a bare command when default prefix cannot be inferred', () => {
+    expect(
+      buildNpmInstallCommand({
+        owningPrefix: '/Users/me/.local/share/npm',
+        defaultPrefix: null,
+      }),
+    ).toBe('npm install -g @jackwener/opencli');
+  });
+
+  it('injects --prefix when owning prefix differs from default (the silent-mismatch case)', () => {
+    // Real-world reproduction: CLI installed under user-level prefix via
+    // ~/.npmrc, but env NPM_CONFIG_PREFIX points to the brew-managed node
+    // prefix, so a bare `npm install -g` would land somewhere PATH never
+    // looks. Hint must call out the owning prefix explicitly.
+    const cmd = buildNpmInstallCommand({
+      owningPrefix: '/Users/me/.local/share/npm',
+      defaultPrefix: '/opt/homebrew/Cellar/node@22/22.22.2_2',
+    });
+    expect(cmd).toBe('npm install -g --prefix "/Users/me/.local/share/npm" @jackwener/opencli');
+  });
+
+  it('treats prefixes that resolve to the same path as a match (trailing slash, dot)', () => {
+    expect(
+      buildNpmInstallCommand({
+        owningPrefix: '/usr/local/',
+        defaultPrefix: '/usr/local',
+      }),
+    ).toBe('npm install -g @jackwener/opencli');
+    expect(
+      buildNpmInstallCommand({
+        owningPrefix: '/usr/local/./',
+        defaultPrefix: '/usr/local',
+      }),
+    ).toBe('npm install -g @jackwener/opencli');
+  });
+});
+
+describe('inferOwningGlobalPrefix', () => {
+  it('returns the prefix above lib/node_modules for a standard POSIX npm global install', () => {
+    expect(
+      inferOwningGlobalPrefix(
+        '/Users/me/.local/share/npm/lib/node_modules/@jackwener/opencli/dist/src/update-check.js',
+      ),
+    ).toBe('/Users/me/.local/share/npm');
+  });
+
+  it('returns the prefix above node_modules when there is no lib/ segment (e.g. Windows)', () => {
+    expect(
+      inferOwningGlobalPrefix(
+        '/c/Users/me/AppData/Roaming/npm/node_modules/@jackwener/opencli/dist/src/update-check.js',
+      ),
+    ).toBe('/c/Users/me/AppData/Roaming/npm');
+  });
+
+  it('returns null when the module path is outside any node_modules/@jackwener/opencli (dev / source build)', () => {
+    expect(
+      inferOwningGlobalPrefix('/Users/me/code/opencli/src/update-check.ts'),
+    ).toBeNull();
+    expect(
+      inferOwningGlobalPrefix('/Users/me/code/opencli/dist/src/update-check.js'),
+    ).toBeNull();
+  });
+});
+
+describe('inferDefaultPrefixFromExecPath', () => {
+  it('strips the bin/ segment for a POSIX node binary', () => {
+    expect(
+      inferDefaultPrefixFromExecPath('/opt/homebrew/Cellar/node@22/22.22.2_2/bin/node'),
+    ).toBe('/opt/homebrew/Cellar/node@22/22.22.2_2');
+  });
+
+  it('returns null on POSIX when the layout is non-standard (no bin/ parent)', () => {
+    expect(
+      inferDefaultPrefixFromExecPath('/some/weird/place/node'),
+    ).toBeNull();
   });
 });

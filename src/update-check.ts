@@ -18,6 +18,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { styleText } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { PKG_VERSION } from './version.js';
 
 const CACHE_DIR = path.join(os.homedir(), '.opencli');
@@ -86,10 +87,104 @@ function isCI(): boolean {
   return !!(process.env.CI || process.env.CONTINUOUS_INTEGRATION);
 }
 
+/**
+ * Infer the npm global prefix that owns the currently-running CLI binary.
+ *
+ * Returns null when this CLI is being executed from source (dev / vitest) or
+ * from a layout that doesn't match the standard npm global install
+ * (`<prefix>/lib/node_modules/@jackwener/opencli/...` on POSIX, no `lib/`
+ * segment on Windows).
+ *
+ * The point: if this returns a string, that string is the prefix you must
+ * `npm install -g --prefix <here>` against to actually overwrite this CLI.
+ */
+function inferOwningGlobalPrefix(modulePath: string): string | null {
+  try {
+    const marker = `${path.sep}node_modules${path.sep}@jackwener${path.sep}opencli${path.sep}`;
+    const idx = modulePath.indexOf(marker);
+    if (idx === -1) return null;
+    const beforeNodeModules = modulePath.slice(0, idx);
+    // POSIX npm global layout: `<prefix>/lib/node_modules/...`. Windows: no `lib/`.
+    if (path.basename(beforeNodeModules) === 'lib') return path.dirname(beforeNodeModules);
+    return beforeNodeModules;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compute the npm global prefix that `npm install -g` *would* default to,
+ * derived from the running node binary (`<prefix>/bin/node` on POSIX,
+ * `<prefix>/node.exe` on Windows). Returns null if the layout is unfamiliar.
+ *
+ * Note: this is a heuristic — the actual default can be overridden by
+ * `~/.npmrc`, `NPM_CONFIG_PREFIX`, etc. We only use it as a tiebreaker against
+ * `inferOwningGlobalPrefix` to decide whether the upgrade hint needs an
+ * explicit `--prefix` flag.
+ */
+function inferDefaultPrefixFromExecPath(execPath: string): string | null {
+  try {
+    const dir = path.dirname(execPath);
+    if (path.basename(dir) === 'bin') return path.dirname(dir);
+    // Windows: `<prefix>/node.exe` — exec path's dir IS the prefix.
+    if (process.platform === 'win32') return dir;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the `npm install -g` command suggested in upgrade hints.
+ *
+ * If the prefix that owns the running CLI binary differs from the prefix
+ * `npm install -g` would default to (e.g. CLI installed under
+ * `~/.local/share/npm` via `~/.npmrc`, but `NPM_CONFIG_PREFIX` env points
+ * at the brew node prefix), emit `--prefix <owning>` so the upgrade lands
+ * on the same binary the user is already running.
+ *
+ * This silent prefix mismatch is the most common cause of "I ran the
+ * upgrade command and `opencli --version` didn't change."
+ */
+function buildNpmInstallCommand({
+  owningPrefix,
+  defaultPrefix,
+}: {
+  owningPrefix: string | null;
+  defaultPrefix: string | null;
+}): string {
+  if (
+    owningPrefix &&
+    defaultPrefix &&
+    path.resolve(owningPrefix) !== path.resolve(defaultPrefix)
+  ) {
+    // Quote the path defensively in case it contains spaces.
+    return `npm install -g --prefix "${owningPrefix}" @jackwener/opencli`;
+  }
+  return 'npm install -g @jackwener/opencli';
+}
+
+/**
+ * Public: returns the current upgrade command for this runtime, with
+ * `--prefix` injected when the running binary's prefix differs from npm's
+ * default.
+ */
+export function getUpgradeCommand(): string {
+  return buildNpmInstallCommand({
+    owningPrefix: inferOwningGlobalPrefix(fileURLToPath(import.meta.url)),
+    defaultPrefix: inferDefaultPrefixFromExecPath(process.execPath),
+  });
+}
+
 interface NoticeInputs {
   cliVersion: string;
   cache: UpdateCache | null;
   now: number;
+  /**
+   * Optional override of the install command (test seam). Defaults to the
+   * runtime-inferred command via `getUpgradeCommand()`.
+   */
+  installCommand?: string;
 }
 
 interface NoticeLines {
@@ -98,13 +193,14 @@ interface NoticeLines {
 }
 
 /** Pure function: derive notice text from cache state. Exported for tests. */
-function buildUpdateNotices({ cliVersion, cache, now }: NoticeInputs): NoticeLines {
+function buildUpdateNotices({ cliVersion, cache, now, installCommand }: NoticeInputs): NoticeLines {
   if (!cache) return {};
   const lines: NoticeLines = {};
+  const cmd = installCommand ?? getUpgradeCommand();
   if (cache.latestVersion && isNewer(cache.latestVersion, cliVersion)) {
     lines.cli =
       styleText('yellow', `\n  Update available: v${cliVersion} → v${cache.latestVersion}\n`) +
-      styleText('dim', `  Run: npm install -g @jackwener/opencli\n`);
+      styleText('dim', `  Run: ${cmd}\n`);
   }
   const { currentExtensionVersion, latestExtensionVersion, extensionLastSeenAt } = cache;
   if (
@@ -233,5 +329,8 @@ export function getCachedLatestExtensionVersion(): string | undefined {
 export {
   extractLatestExtensionVersionFromReleases as _extractLatestExtensionVersionFromReleases,
   buildUpdateNotices as _buildUpdateNotices,
+  buildNpmInstallCommand as _buildNpmInstallCommand,
+  inferOwningGlobalPrefix as _inferOwningGlobalPrefix,
+  inferDefaultPrefixFromExecPath as _inferDefaultPrefixFromExecPath,
   EXTENSION_STALE_MS as _EXTENSION_STALE_MS,
 };

@@ -10,7 +10,7 @@ import { BrowserBridge } from './browser/index.js';
 import { getDaemonHealth, listSessions } from './browser/daemon-client.js';
 import { getErrorMessage } from './errors.js';
 import { getRuntimeLabel } from './runtime-detect.js';
-import { getCachedLatestExtensionVersion } from './update-check.js';
+import { getCachedLatestExtensionVersion, getUpgradeCommand } from './update-check.js';
 import type { BrowserSessionInfo } from './types.js';
 import type { BrowserProfileStatus } from './browser/daemon-client.js';
 import { aliasForContextId, loadProfileConfig } from './browser/profile.js';
@@ -196,7 +196,7 @@ export async function runBrowserDoctor(opts: DoctorOptions = {}): Promise<Doctor
     if (!satisfiesRange(opts.cliVersion, extensionCompatRange)) {
       issues.push(
         `CLI version incompatible with extension: extension v${extensionVersion} requires CLI ${extensionCompatRange}, but CLI is v${opts.cliVersion}\n` +
-        '  Update the CLI: npm install -g @jackwener/opencli\n' +
+        `  Update the CLI: ${getUpgradeCommand()}\n` +
         '  Or download a compatible extension from: https://github.com/jackwener/opencli/releases',
       );
     }
