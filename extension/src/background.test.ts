@@ -31,17 +31,35 @@ const adapterKey = (session: string): string => leaseKey('adapter', session);
 class MockWebSocket {
   static OPEN = 1;
   static CONNECTING = 0;
+  static CLOSED = 3;
+  static instances: MockWebSocket[] = [];
   readyState = MockWebSocket.CONNECTING;
+  sent: string[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
 
-  constructor(_url: string) {}
-  send(_data: string): void {}
+  constructor(_url: string) {
+    MockWebSocket.instances.push(this);
+  }
+  send(data: string): void {
+    this.sent.push(data);
+  }
   close(): void {
+    this.readyState = MockWebSocket.CLOSED;
     this.onclose?.();
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function createChromeMock() {
@@ -194,6 +212,7 @@ describe('background tab isolation', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.useRealTimers();
+    MockWebSocket.instances = [];
     vi.stubGlobal('WebSocket', MockWebSocket);
   });
 
@@ -267,6 +286,69 @@ describe('background tab isolation', () => {
       { index: 0, frameId: 'cross-origin-nested', url: 'https://x.example/widget', name: 'nested-x' },
       { index: 1, frameId: 'cross-origin-sibling', url: 'https://y.example/iframe', name: 'sibling-y' },
     ]);
+  });
+
+  it('does not parse lease-key separators from command session fields', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+
+    expect(mod.__test__.getSessionName(adapterKey('twitter'))).toBe(adapterKey('twitter'));
+    expect(mod.__test__.getCommandSurface({ session: adapterKey('twitter') })).toBe('browser');
+    expect(mod.__test__.getCommandSurface({ session: browserKey('work'), surface: 'adapter' })).toBe('adapter');
+  });
+
+  it('routes structured command session and surface fields without encoded lease keys', async () => {
+    const { chrome } = createChromeMock();
+    chrome.debugger.sendCommand = vi.fn(async () => ({}));
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1);
+
+    const result = await mod.__test__.handleCommand({
+      id: 'structured-cdp',
+      action: 'cdp',
+      session: 'twitter',
+      surface: 'adapter',
+      cdpMethod: 'Accessibility.enable',
+      cdpParams: {},
+    });
+
+    expect(result).toEqual(expect.objectContaining({ ok: true }));
+    expect(chrome.debugger.sendCommand).toHaveBeenCalledWith(
+      { tabId: 1 },
+      'Accessibility.enable',
+      {},
+    );
+  });
+
+  it('does not route encoded adapter lease keys through the command session backdoor', async () => {
+    const { chrome } = createChromeMock();
+    chrome.debugger.sendCommand = vi.fn(async () => ({}));
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setAutomationWindowId(adapterKey('twitter'), 1);
+
+    const result = await mod.__test__.handleCommand({
+      id: 'encoded-session',
+      action: 'cdp',
+      session: adapterKey('twitter'),
+      cdpMethod: 'Accessibility.enable',
+      cdpParams: {},
+    });
+
+    expect(result).toEqual(expect.objectContaining({ ok: true }));
+    expect(mod.__test__.getSession(adapterKey('twitter'))).toEqual(expect.objectContaining({
+      surface: 'adapter',
+      session: 'twitter',
+    }));
+    expect(mod.__test__.getSession(browserKey(adapterKey('twitter')))).toEqual(expect.objectContaining({
+      surface: 'browser',
+      session: adapterKey('twitter'),
+    }));
   });
 
   it('allows Accessibility.enable through the guarded CDP passthrough', async () => {
@@ -511,7 +593,6 @@ describe('background tab isolation', () => {
         title: 'bilibili',
         url: 'https://www.bilibili.com/',
         timedOut: false,
-        session: 'twitter',
       },
     });
     expect(update).not.toHaveBeenCalled();
@@ -585,6 +666,100 @@ describe('background tab isolation', () => {
         contextId: 'abc123xy',
       }));
     });
+  });
+
+  it('keeps the active daemon connection when a superseded WebSocket closes later', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true })));
+
+    await import('./background');
+    await vi.waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+    const firstWs = MockWebSocket.instances[0];
+    firstWs.readyState = 3;
+
+    const onAlarmListener = chrome.alarms.onAlarm.addListener.mock.calls[0][0];
+    await onAlarmListener({ name: 'keepalive' });
+    await vi.waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(2);
+    });
+    const secondWs = MockWebSocket.instances[1];
+    secondWs.readyState = MockWebSocket.OPEN;
+
+    firstWs.onclose?.();
+    secondWs.onmessage?.({
+      data: JSON.stringify({
+        id: 'sessions-after-stale-close',
+        action: 'tabs',
+        op: 'list',
+        session: 'work',
+        surface: 'browser',
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(secondWs.sent.some((entry) => entry.includes('sessions-after-stale-close'))).toBe(true);
+    });
+  });
+
+  it('coalesces concurrent daemon connection attempts while the probe is in flight', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+    const ping = deferred<{ ok: boolean }>();
+    const fetchMock = vi.fn(() => ping.promise);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await import('./background');
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    const onAlarmListener = chrome.alarms.onAlarm.addListener.mock.calls[0][0];
+    await onAlarmListener({ name: 'keepalive' });
+    await onAlarmListener({ name: 'keepalive' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(MockWebSocket.instances).toHaveLength(0);
+
+    ping.resolve({ ok: true });
+    await vi.waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+  });
+
+  it('ignores daemon commands delivered to a superseded WebSocket', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true })));
+
+    await import('./background');
+    await vi.waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+    const firstWs = MockWebSocket.instances[0];
+    firstWs.readyState = MockWebSocket.OPEN;
+
+    const onAlarmListener = chrome.alarms.onAlarm.addListener.mock.calls[0][0];
+    firstWs.readyState = MockWebSocket.CLOSED;
+    await onAlarmListener({ name: 'keepalive' });
+    await vi.waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(2);
+    });
+    firstWs.readyState = MockWebSocket.OPEN;
+
+    await firstWs.onmessage?.({
+      data: JSON.stringify({
+        id: 'stale-command',
+        action: 'tabs',
+        op: 'list',
+        session: 'work',
+        surface: 'browser',
+      }),
+    });
+
+    expect(firstWs.sent.some((entry) => entry.includes('stale-command'))).toBe(false);
   });
 
   it('can execute concurrently on two pages in the same session', async () => {
@@ -943,7 +1118,8 @@ describe('background tab isolation', () => {
       id: 'new-foreground',
       action: 'tabs',
       op: 'new',
-      session: adapterKey('twitter'),
+      session: 'twitter',
+      surface: 'adapter',
       url: 'https://x.com',
       windowMode: 'foreground',
     });
@@ -1259,7 +1435,8 @@ describe('background tab isolation', () => {
     const result = await mod.__test__.handleCommand({
       id: 'close-1',
       action: 'close-window',
-      session: browserKey('default'),
+      session: 'default',
+      surface: 'browser',
     });
 
     expect(result.ok).toBe(true);
@@ -1280,7 +1457,8 @@ describe('background tab isolation', () => {
     await mod.__test__.handleCommand({
       id: 'custom-1',
       action: 'cookies',
-      session: browserKey('default'),
+      session: 'default',
+      surface: 'browser',
       domain: 'example.com',
       idleTimeout: 120,
     });
@@ -1409,7 +1587,8 @@ describe('background tab isolation', () => {
     const result = await mod.__test__.handleCommand({
       id: 'bound-close',
       action: 'close-window',
-      session: browserKey('default'),
+      session: 'default',
+      surface: 'browser',
     });
 
     expect(result).toEqual(expect.objectContaining({ ok: true }));
@@ -1443,7 +1622,8 @@ describe('background tab isolation', () => {
     const result = await mod.__test__.handleCommand({
       id: 'bound-exec-gone',
       action: 'exec',
-      session: browserKey('default'),
+      session: 'default',
+      surface: 'browser',
       code: 'document.title',
     });
 
@@ -1465,7 +1645,8 @@ describe('background tab isolation', () => {
     const result = await mod.__test__.handleCommand({
       id: 'bound-exec-undebuggable',
       action: 'exec',
-      session: browserKey('default'),
+      session: 'default',
+      surface: 'browser',
       code: 'document.title',
     });
 
@@ -1492,13 +1673,15 @@ describe('background tab isolation', () => {
     const nav = await mod.__test__.handleCommand({
       id: 'bound-nav',
       action: 'navigate',
-      session: browserKey('default'),
+      session: 'default',
+      surface: 'browser',
       url: 'https://other.example',
     });
     const tabNew = await mod.__test__.handleCommand({
       id: 'bound-tab-new',
       action: 'tabs',
-      session: browserKey('default'),
+      session: 'default',
+      surface: 'browser',
       op: 'new',
       url: 'https://other.example',
     });

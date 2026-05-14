@@ -626,6 +626,7 @@ let reconnectAttempts = 0;
 const CONTEXT_ID_KEY = "opencli_context_id_v1";
 let currentContextId = "default";
 let contextIdPromise = null;
+let connectInFlight = null;
 async function getCurrentContextId() {
   if (contextIdPromise) return contextIdPromise;
   contextIdPromise = (async () => {
@@ -671,11 +672,19 @@ const _origLog = console.log.bind(console);
 const _origWarn = console.warn.bind(console);
 const _origError = console.error.bind(console);
 function forwardLog(level, args) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   try {
     const msg = args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-    ws.send(JSON.stringify({ type: "log", level, msg, ts: Date.now() }));
+    safeSend(ws, { type: "log", level, msg, ts: Date.now() });
   } catch {
+  }
+}
+function safeSend(socket, payload) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
   }
 }
 console.log = (...args) => {
@@ -690,52 +699,71 @@ console.error = (...args) => {
   _origError(...args);
   forwardLog("error", args);
 };
-async function connect() {
-  if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return;
+function isDaemonSocketActive(socket = ws) {
+  return socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING;
+}
+function connect() {
+  if (isDaemonSocketActive()) return Promise.resolve();
+  if (connectInFlight) return connectInFlight;
+  connectInFlight = connectAttempt().finally(() => {
+    connectInFlight = null;
+  });
+  return connectInFlight;
+}
+async function connectAttempt() {
+  if (isDaemonSocketActive()) return;
   try {
     const res = await fetch(DAEMON_PING_URL, { signal: AbortSignal.timeout(1e3) });
     if (!res.ok) return;
   } catch {
     return;
   }
+  if (isDaemonSocketActive()) return;
+  let thisWs;
   try {
     const contextId = await getCurrentContextId();
-    ws = new WebSocket(DAEMON_WS_URL);
+    if (isDaemonSocketActive()) return;
+    thisWs = new WebSocket(DAEMON_WS_URL);
+    ws = thisWs;
     currentContextId = contextId;
   } catch {
     scheduleReconnect();
     return;
   }
-  ws.onopen = () => {
+  thisWs.onopen = () => {
+    if (ws !== thisWs) return;
     console.log("[opencli] Connected to daemon");
     reconnectAttempts = 0;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    ws?.send(JSON.stringify({
+    safeSend(thisWs, {
       type: "hello",
       contextId: currentContextId,
       version: chrome.runtime.getManifest().version,
       compatRange: ">=1.7.0"
-    }));
+    });
   };
-  ws.onmessage = async (event) => {
+  thisWs.onmessage = async (event) => {
+    if (ws !== thisWs) return;
     try {
       const command = JSON.parse(event.data);
       const result = await handleCommand(command);
-      ws?.send(JSON.stringify(result));
+      if (ws !== thisWs) return;
+      safeSend(thisWs, result);
     } catch (err) {
       console.error("[opencli] Message handling error:", err);
     }
   };
-  ws.onclose = () => {
+  thisWs.onclose = () => {
+    if (ws !== thisWs) return;
     console.log("[opencli] Disconnected from daemon");
     ws = null;
     scheduleReconnect();
   };
-  ws.onerror = () => {
-    ws?.close();
+  thisWs.onerror = () => {
+    thisWs.close();
   };
 }
 const MAX_EAGER_ATTEMPTS = 6;
@@ -785,14 +813,11 @@ function getSessionName(session) {
   if (!raw) throw new CommandFailure(
     "session_required",
     "Browser session is required.",
-    "Pass --session <name> with opencli browser commands."
+    "Pass a browser session name, e.g. opencli browser <session> <command>."
   );
-  return raw.includes(LEASE_KEY_SEPARATOR) ? getSessionFromKey(raw) : raw;
+  return raw;
 }
 function getCommandSurface(cmd) {
-  if (typeof cmd.session === "string" && cmd.session.includes(LEASE_KEY_SEPARATOR)) {
-    return getSurfaceFromKey(cmd.session);
-  }
   return cmd.surface === "adapter" ? "adapter" : "browser";
 }
 function getSurfaceFromKey(key) {
@@ -1483,9 +1508,7 @@ async function resolveTab(tabId, leaseKey, initialUrl) {
 }
 async function pageScopedResult(id, tabId, data) {
   const page = await resolveTargetId(tabId);
-  const lease = [...automationSessions.values()].find((session) => session.preferredTabId === tabId);
-  const scopedData = data && typeof data === "object" && !Array.isArray(data) ? { session: lease?.session, ...data } : { session: lease?.session, data };
-  return { id, ok: true, data: scopedData, page };
+  return { id, ok: true, data, page };
 }
 async function resolveTabId(tabId, leaseKey, initialUrl) {
   const resolved = await resolveTab(tabId, leaseKey, initialUrl);

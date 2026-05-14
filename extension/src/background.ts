@@ -18,6 +18,7 @@ let reconnectAttempts = 0;
 const CONTEXT_ID_KEY = 'opencli_context_id_v1';
 let currentContextId = 'default';
 let contextIdPromise: Promise<string> | null = null;
+let connectInFlight: Promise<void> | null = null;
 
 async function getCurrentContextId(): Promise<string> {
   if (contextIdPromise) return contextIdPromise;
@@ -70,11 +71,20 @@ const _origWarn = console.warn.bind(console);
 const _origError = console.error.bind(console);
 
 function forwardLog(level: 'info' | 'warn' | 'error', args: unknown[]): void {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   try {
     const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
-    ws.send(JSON.stringify({ type: 'log', level, msg, ts: Date.now() }));
+    safeSend(ws, { type: 'log', level, msg, ts: Date.now() });
   } catch { /* don't recurse */ }
+}
+
+function safeSend(socket: WebSocket | null | undefined, payload: unknown): boolean {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 console.log = (...args: unknown[]) => { _origLog(...args); forwardLog('info', args); };
@@ -83,6 +93,10 @@ console.error = (...args: unknown[]) => { _origError(...args); forwardLog('error
 
 // ─── WebSocket connection ────────────────────────────────────────────
 
+function isDaemonSocketActive(socket: WebSocket | null | undefined = ws): boolean {
+  return socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING;
+}
+
 /**
  * Probe the daemon via its /ping HTTP endpoint before attempting a WebSocket
  * connection.  fetch() failures are silently catchable; new WebSocket() is not
@@ -90,8 +104,17 @@ console.error = (...args: unknown[]) => { _origError(...args); forwardLog('error
  * JS handler can intercept it.  By keeping the probe inside connect() every
  * call site remains unchanged and the guard can never be accidentally skipped.
  */
-async function connect(): Promise<void> {
-  if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return;
+function connect(): Promise<void> {
+  if (isDaemonSocketActive()) return Promise.resolve();
+  if (connectInFlight) return connectInFlight;
+  connectInFlight = connectAttempt().finally(() => {
+    connectInFlight = null;
+  });
+  return connectInFlight;
+}
+
+async function connectAttempt(): Promise<void> {
+  if (isDaemonSocketActive()) return;
 
   try {
     const res = await fetch(DAEMON_PING_URL, { signal: AbortSignal.timeout(1000) });
@@ -99,17 +122,22 @@ async function connect(): Promise<void> {
   } catch {
     return; // daemon not running — skip WebSocket to avoid console noise
   }
+  if (isDaemonSocketActive()) return;
 
+  let thisWs: WebSocket;
   try {
     const contextId = await getCurrentContextId();
-    ws = new WebSocket(DAEMON_WS_URL);
+    if (isDaemonSocketActive()) return;
+    thisWs = new WebSocket(DAEMON_WS_URL);
+    ws = thisWs;
     currentContextId = contextId;
   } catch {
     scheduleReconnect();
     return;
   }
 
-  ws.onopen = () => {
+  thisWs.onopen = () => {
+    if (ws !== thisWs) return;
     console.log('[opencli] Connected to daemon');
     reconnectAttempts = 0; // Reset on successful connection
     if (reconnectTimer) {
@@ -117,32 +145,35 @@ async function connect(): Promise<void> {
       reconnectTimer = null;
     }
     // Send version + compatibility range so the daemon can report mismatches to the CLI
-    ws?.send(JSON.stringify({
+    safeSend(thisWs, {
       type: 'hello',
       contextId: currentContextId,
       version: chrome.runtime.getManifest().version,
       compatRange: __OPENCLI_COMPAT_RANGE__,
-    }));
+    });
   };
 
-  ws.onmessage = async (event) => {
+  thisWs.onmessage = async (event) => {
+    if (ws !== thisWs) return;
     try {
       const command = JSON.parse(event.data as string) as Command;
       const result = await handleCommand(command);
-      ws?.send(JSON.stringify(result));
+      if (ws !== thisWs) return;
+      safeSend(thisWs, result);
     } catch (err) {
       console.error('[opencli] Message handling error:', err);
     }
   };
 
-  ws.onclose = () => {
+  thisWs.onclose = () => {
+    if (ws !== thisWs) return;
     console.log('[opencli] Disconnected from daemon');
     ws = null;
     scheduleReconnect();
   };
 
-  ws.onerror = () => {
-    ws?.close();
+  thisWs.onerror = () => {
+    thisWs.close();
   };
 }
 
@@ -249,15 +280,12 @@ function getSessionName(session?: string): string {
   if (!raw) throw new CommandFailure(
     'session_required',
     'Browser session is required.',
-    'Pass --session <name> with opencli browser commands.',
+    'Pass a browser session name, e.g. opencli browser <session> <command>.',
   );
-  return raw.includes(LEASE_KEY_SEPARATOR) ? getSessionFromKey(raw) : raw;
+  return raw;
 }
 
 function getCommandSurface(cmd: Pick<Command, 'surface' | 'session'>): BrowserSurface {
-  if (typeof cmd.session === 'string' && cmd.session.includes(LEASE_KEY_SEPARATOR)) {
-    return getSurfaceFromKey(cmd.session);
-  }
   return cmd.surface === 'adapter' ? 'adapter' : 'browser';
 }
 
@@ -1113,11 +1141,7 @@ async function resolveTab(tabId: number | undefined, leaseKey: string, initialUr
 /** Build a page-scoped success result with targetId resolved from tabId */
 async function pageScopedResult(id: string, tabId: number, data?: unknown): Promise<Result> {
   const page = await identity.resolveTargetId(tabId);
-  const lease = [...automationSessions.values()].find((session) => session.preferredTabId === tabId);
-  const scopedData = data && typeof data === 'object' && !Array.isArray(data)
-    ? { session: lease?.session, ...(data as Record<string, unknown>) }
-    : { session: lease?.session, data };
-  return { id, ok: true, data: scopedData, page };
+  return { id, ok: true, data, page };
 }
 
 /** Convenience wrapper returning just the tabId (used by most handlers) */
@@ -1715,6 +1739,8 @@ export const __test__ = {
   resolveTabId,
   resetWindowIdleTimer,
   handleCommand,
+  getSessionName,
+  getCommandSurface,
   getIdleTimeout,
   getLeaseKey,
   sessionTimeoutOverrides,
