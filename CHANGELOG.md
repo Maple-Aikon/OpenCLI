@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+* **adapters** — surface the remaining `silent-empty-fallback` adapter failures as typed errors. Douyin user video comment fetch failures, Jike SSR JSON parse failures, and WeRead search-page fetch failures now throw `CommandExecutionError`; true empty Douyin/Jike/WeRead result sets now throw `EmptyResultError`.
+
+### Internal
+
+* **audit** — stop flagging sentinel fallback strings inside thrown error messages as `silent-sentinel` violations. These are typed failure diagnostics rather than fake row data, reducing the typed-error baseline to actual adapter output fallbacks.
+
+## [1.7.22](https://github.com/jackwener/opencli/compare/v1.7.21...v1.7.22) (2026-05-15)
+
+External CLI ergonomics + two adapter envelope/auth fixes. New `longbridge` external CLI entry; `opencli list` / root help now render human-readable brand labels for executables whose bare name is ambiguous.
+
+### Features
+
+* **external** — add the Longbridge CLI as a built-in external CLI passthrough (`opencli longbridge ...`) for Longbridge OpenAPI market data, account, and trading commands. ([#1584](https://github.com/jackwener/opencli/issues/1584))
+* **external-cli** — render brand alias `name(package)` in `opencli list` and root help when the bare executable name is ambiguous. Built-in entries `ntn` → `ntn(notion)`, `dws` → `dws(DingTalk Workspace)`, `wecom-cli` → `wecom-cli(企业微信)` now self-explain in help output. `package` field is repurposed to cover both upstream distribution names (e.g. `tg-cli`) and human-readable brand labels (e.g. `notion`, `企业微信`). ([#1585](https://github.com/jackwener/opencli/issues/1585))
+
+### Bug Fixes
+
+* **boss** — map `code=24` (identity mismatch) to `AuthRequiredError` so re-login is signaled instead of surfacing as a generic API error. ([#1573](https://github.com/jackwener/opencli/issues/1573))
+* **weibo** — unwrap Browser Bridge `page.evaluate` envelopes in read adapters. ([#1568](https://github.com/jackwener/opencli/issues/1568))
+
+## [1.7.21](https://github.com/jackwener/opencli/compare/v1.7.20...v1.7.21) (2026-05-14)
+
+Adapter polish release: new web search adapters, better Browser Bridge tab group reuse, and social adapters returning to one-shot tab leases. Extension package version is bumped to 1.0.15 for the Browser Bridge fix.
+
+### Features
+
+* **search** — add DuckDuckGo, Brave, and Yahoo web search adapters. ([#1546](https://github.com/jackwener/opencli/issues/1546))
+* **boss** — support job-seeker `chatlist` and `chatmsg` adapters. ([#1539](https://github.com/jackwener/opencli/issues/1539))
+
+### Bug Fixes
+
+* **extension** — reuse existing `OpenCLI Adapter` tab groups before creating new ones, including cross-window discovery, legacy `OpenCLI` title fallback, and deterministic candidate selection. ([#1541](https://github.com/jackwener/opencli/issues/1541))
+* **twitter, reddit** — default browser-backed social adapters back to ephemeral tab leases. Twitter/X and Reddit commands now release their site tab after each run while keeping the shared Adapter window available for reuse; persistent sessions remain reserved for AI/chat-style adapters that need long-lived conversation state. ([#1569](https://github.com/jackwener/opencli/issues/1569))
+* **xiaohongshu, rednote** — unwrap Browser Bridge `page.evaluate` envelopes in search adapters. ([#1561](https://github.com/jackwener/opencli/issues/1561))
+* **facebook/feed** — add fallback extraction for empty article nodes. ([#1538](https://github.com/jackwener/opencli/issues/1538))
+
+### Internal
+
+* **ci** — add Windows native binding lockfile entries for Rolldown/Rollup optional packages. ([#1563](https://github.com/jackwener/opencli/issues/1563))
+* **extension** — add regression coverage for the adapter tab group `groupId` tiebreaker. ([#1566](https://github.com/jackwener/opencli/issues/1566))
+
 ## [1.7.20](https://github.com/jackwener/opencli/compare/v1.7.19...v1.7.20) (2026-05-14)
 
 External CLI surface cleanup + Browser Bridge WebSocket lifecycle hardening. Two BREAKING changes around external CLIs: built-in `tg`/`discord`/`wx` (was `tg-cli`/`discord-cli`/`wx-cli`) now match their real binary names, and Notion's in-tree CDP adapter is replaced by the official `ntn` external CLI.
