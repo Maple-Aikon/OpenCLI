@@ -2297,8 +2297,56 @@
   },
   {
     "site": "bilibili",
+    "name": "comment",
+    "description": "在 B站视频下发表评论或回复（官方 API，需登录；消息里的 @用户 会被解析为真实提及）",
+    "access": "write",
+    "domain": "www.bilibili.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "bvid",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Video BV ID / URL / b23.tv short link"
+      },
+      {
+        "name": "message",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Comment text. Any @username in it is resolved to a real mention"
+      },
+      {
+        "name": "parent",
+        "type": "int",
+        "required": false,
+        "help": "top-level/root rpid to reply under (omit for a top-level comment)"
+      },
+      {
+        "name": "execute",
+        "type": "boolean",
+        "required": false,
+        "help": "Actually post the comment. Without it the command refuses to write."
+      }
+    ],
+    "columns": [
+      "rpid",
+      "bvid",
+      "oid",
+      "message",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "bilibili/comment.js",
+    "sourceFile": "bilibili/comment.js",
+    "navigateBefore": "https://www.bilibili.com"
+  },
+  {
+    "site": "bilibili",
     "name": "comments",
-    "description": "获取 B站视频评论（使用官方 API + WBI 签名）",
+    "description": "获取 B站视频评论（官方 API；用 --parent <rpid> 读取某条评论下的「楼中楼」回复）",
     "access": "read",
     "domain": "www.bilibili.com",
     "strategy": "cookie",
@@ -2312,6 +2360,12 @@
         "help": "Video BV ID (e.g. BV1WtAGzYEBm)"
       },
       {
+        "name": "parent",
+        "type": "int",
+        "required": false,
+        "help": "rpid of a comment — fetch the replies under it instead of top-level comments"
+      },
+      {
         "name": "limit",
         "type": "int",
         "default": 20,
@@ -2321,6 +2375,7 @@
     ],
     "columns": [
       "rank",
+      "rpid",
       "author",
       "text",
       "likes",
@@ -5238,6 +5293,143 @@
     "navigateBefore": true
   },
   {
+    "site": "chess",
+    "name": "analyze",
+    "description": "Open a Chess.com game in the browser analysis board",
+    "access": "read",
+    "domain": "www.chess.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "game-url",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Full game URL, e.g. https://www.chess.com/game/live/168842570216"
+      }
+    ],
+    "columns": [
+      "kind",
+      "game_id",
+      "analysis_url"
+    ],
+    "type": "js",
+    "modulePath": "chess/analyze.js",
+    "sourceFile": "chess/analyze.js",
+    "navigateBefore": false
+  },
+  {
+    "site": "chess",
+    "name": "game",
+    "description": "Chess.com single-game detail (white, black, result, ECO, time control) by full game URL",
+    "access": "read",
+    "domain": "www.chess.com",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "game-url",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Full game URL, e.g. https://www.chess.com/game/live/168842570216"
+      }
+    ],
+    "columns": [
+      "kind",
+      "game_id",
+      "date",
+      "white",
+      "white_rating",
+      "black",
+      "black_rating",
+      "result",
+      "winner_color",
+      "termination",
+      "eco",
+      "time_control",
+      "rated",
+      "ply_count",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "chess/game.js",
+    "sourceFile": "chess/game.js"
+  },
+  {
+    "site": "chess",
+    "name": "games",
+    "description": "Chess.com recent games for a player, newest first",
+    "access": "read",
+    "domain": "api.chess.com",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "username",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Chess.com username"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 10,
+        "required": false,
+        "help": "Number of recent games (1-100)"
+      }
+    ],
+    "columns": [
+      "date",
+      "time_class",
+      "rated",
+      "my_color",
+      "my_rating",
+      "my_result",
+      "opponent",
+      "opponent_rating",
+      "accuracy_white",
+      "accuracy_black",
+      "eco",
+      "opening_name",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "chess/games.js",
+    "sourceFile": "chess/games.js"
+  },
+  {
+    "site": "chess",
+    "name": "stats",
+    "description": "Chess.com player ratings + win/loss record across game kinds",
+    "access": "read",
+    "domain": "api.chess.com",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "username",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Chess.com username (case-insensitive)"
+      }
+    ],
+    "columns": [
+      "kind",
+      "rating_current",
+      "rating_best",
+      "wins",
+      "losses",
+      "draws"
+    ],
+    "type": "js",
+    "modulePath": "chess/stats.js",
+    "sourceFile": "chess/stats.js"
+  },
+  {
     "site": "claude",
     "name": "ask",
     "description": "Send a prompt to Claude and get the response",
@@ -6118,6 +6310,208 @@
     "type": "js",
     "modulePath": "coingecko/trending.js",
     "sourceFile": "coingecko/trending.js"
+  },
+  {
+    "site": "confluence",
+    "name": "create",
+    "description": "Create a Confluence page from Markdown or storage XHTML",
+    "access": "write",
+    "domain": "atlassian.net",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "space",
+        "type": "string",
+        "required": true,
+        "help": "Cloud space id, or Data Center space key"
+      },
+      {
+        "name": "title",
+        "type": "string",
+        "required": true,
+        "help": "Page title"
+      },
+      {
+        "name": "file",
+        "type": "string",
+        "required": true,
+        "help": "Markdown file path"
+      },
+      {
+        "name": "parent",
+        "type": "string",
+        "required": false,
+        "help": "Optional parent page id"
+      },
+      {
+        "name": "representation",
+        "type": "string",
+        "default": "markdown",
+        "required": false,
+        "help": "Input file format",
+        "choices": [
+          "markdown",
+          "storage"
+        ]
+      },
+      {
+        "name": "execute",
+        "type": "boolean",
+        "required": false,
+        "help": "Actually create the remote page"
+      }
+    ],
+    "columns": [
+      "status",
+      "id",
+      "title",
+      "spaceId",
+      "spaceKey",
+      "version",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "confluence/create.js",
+    "sourceFile": "confluence/create.js"
+  },
+  {
+    "site": "confluence",
+    "name": "page",
+    "description": "Confluence page by id with storage and Markdown body",
+    "access": "read",
+    "domain": "atlassian.net",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "id",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Confluence page id"
+      }
+    ],
+    "columns": [
+      "id",
+      "title",
+      "status",
+      "spaceId",
+      "spaceKey",
+      "version",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "confluence/page.js",
+    "sourceFile": "confluence/page.js"
+  },
+  {
+    "site": "confluence",
+    "name": "search",
+    "description": "Search Confluence content with CQL",
+    "access": "read",
+    "domain": "atlassian.net",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "cql",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "CQL query, e.g. \"type = page and title ~ \\\"RCA\\\"\""
+      },
+      {
+        "name": "space",
+        "type": "string",
+        "required": false,
+        "help": "Limit search to a Confluence space key"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Max results to return (1-100)"
+      }
+    ],
+    "columns": [
+      "id",
+      "title",
+      "type",
+      "spaceKey",
+      "status",
+      "lastModified",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "confluence/search.js",
+    "sourceFile": "confluence/search.js"
+  },
+  {
+    "site": "confluence",
+    "name": "update",
+    "description": "Update a Confluence page body from Markdown or storage XHTML",
+    "access": "write",
+    "domain": "atlassian.net",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "id",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Confluence page id"
+      },
+      {
+        "name": "file",
+        "type": "string",
+        "required": true,
+        "help": "Markdown file path"
+      },
+      {
+        "name": "title",
+        "type": "string",
+        "required": false,
+        "help": "Optional replacement title; defaults to current title"
+      },
+      {
+        "name": "version-message",
+        "type": "string",
+        "required": false,
+        "help": "Confluence version message"
+      },
+      {
+        "name": "representation",
+        "type": "string",
+        "default": "markdown",
+        "required": false,
+        "help": "Input file format",
+        "choices": [
+          "markdown",
+          "storage"
+        ]
+      },
+      {
+        "name": "execute",
+        "type": "boolean",
+        "required": false,
+        "help": "Actually update the remote page"
+      }
+    ],
+    "columns": [
+      "status",
+      "id",
+      "title",
+      "spaceId",
+      "spaceKey",
+      "version",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "confluence/update.js",
+    "sourceFile": "confluence/update.js"
   },
   {
     "site": "coupang",
@@ -14032,6 +14426,171 @@
     "modulePath": "jimeng/workspaces.js",
     "sourceFile": "jimeng/workspaces.js",
     "navigateBefore": "https://jimeng.jianying.com"
+  },
+  {
+    "site": "jira",
+    "name": "attachments",
+    "description": "Jira issue attachment metadata",
+    "access": "read",
+    "domain": "atlassian.net",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "key",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Jira issue key, e.g. PROJ-123"
+      }
+    ],
+    "columns": [
+      "id",
+      "filename",
+      "mimeType",
+      "size",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "jira/attachments.js",
+    "sourceFile": "jira/attachments.js"
+  },
+  {
+    "site": "jira",
+    "name": "comments",
+    "description": "Jira issue comments as Markdown",
+    "access": "read",
+    "domain": "atlassian.net",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "key",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Jira issue key, e.g. PROJ-123"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 50,
+        "required": false,
+        "help": "Max comments to return (1-100)"
+      }
+    ],
+    "columns": [
+      "id",
+      "author",
+      "created",
+      "updated",
+      "markdown"
+    ],
+    "type": "js",
+    "modulePath": "jira/comments.js",
+    "sourceFile": "jira/comments.js"
+  },
+  {
+    "site": "jira",
+    "name": "issue",
+    "description": "Jira issue detail normalized for agents (description, comments, attachments, links)",
+    "access": "read",
+    "domain": "atlassian.net",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "key",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Jira issue key, e.g. PROJ-123"
+      },
+      {
+        "name": "comments-limit",
+        "type": "int",
+        "default": 100,
+        "required": false,
+        "help": "Max comments to include (1-100)"
+      }
+    ],
+    "columns": [
+      "key",
+      "summary",
+      "issueType",
+      "status",
+      "priority",
+      "assignee",
+      "updated",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "jira/issue.js",
+    "sourceFile": "jira/issue.js"
+  },
+  {
+    "site": "jira",
+    "name": "links",
+    "description": "Jira issue links",
+    "access": "read",
+    "domain": "atlassian.net",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "key",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Jira issue key, e.g. PROJ-123"
+      }
+    ],
+    "columns": [
+      "key",
+      "type",
+      "direction"
+    ],
+    "type": "js",
+    "modulePath": "jira/links.js",
+    "sourceFile": "jira/links.js"
+  },
+  {
+    "site": "jira",
+    "name": "search",
+    "description": "Search Jira issues with JQL",
+    "access": "read",
+    "domain": "atlassian.net",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "jql",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "JQL query, e.g. \"project = PROJ order by updated desc\""
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Max issues to return (1-100)"
+      }
+    ],
+    "columns": [
+      "key",
+      "summary",
+      "issueType",
+      "status",
+      "priority",
+      "assignee",
+      "updated",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "jira/search.js",
+    "sourceFile": "jira/search.js"
   },
   {
     "site": "ke",
